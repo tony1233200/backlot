@@ -1021,6 +1021,29 @@ async def warn_slack_post_charset(request: Request, call_next):
     )
 
 
+@app.middleware("http")
+async def merge_slashes_before_a_slack_method_name(request: Request, call_next):
+    """Serve a `/slack/api/` path whose method name follows a run of `/`s or a `\\` as the method
+    it names, because real does: measured against slack.com/api on 2026-10-20, `//api.test`,
+    `///api.test` and `\\api.test` answer `api.test`'s own answer, and `//emoji.list` and
+    `//nonexistent.method` answer as those names do on their own spelling.
+
+    Registered after the other Slack middlewares, which makes it the outermost of them: the path
+    is rewritten before the body is read, before an unserved name is answered and before any route
+    is matched, so every served method gains the second spelling with its own credential, body and
+    charset rules intact, rather than each layer learning the run for itself. Only a path
+    ``slack.method_name`` reads as a method's name is rewritten, and only its leading run: a run
+    anywhere else names no method (`a//b.c` is real's 404 page, which the unserved layer answers),
+    and a name it cannot read (`//a-b`) is left for that layer's page too."""
+    path = request.scope["path"]
+    if path.startswith("/slack/api/") and slack.method_name(path) is not None:
+        merged = "/slack/api/" + path.removeprefix("/slack/api/").lstrip("/\\")
+        if merged != path:
+            request.scope["path"] = merged
+            request.scope["raw_path"] = merged.encode()
+    return await call_next(request)
+
+
 #: The page Cloudflare, in front of Linear and Fireflies, answers a request carrying `Authorization`
 #: more than once with: `text/html` with no charset, CRLF line ends, 155 bytes.
 _CLOUDFLARE_REPEATED_AUTHORIZATION = (

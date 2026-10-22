@@ -917,8 +917,11 @@ _NOT_FOUND_PAGE = (
 
 def method_name(path: str) -> str | None:
     """The method a `/slack/api/` path names, as :data:`_METHOD_NAME` reads it, or None for one it
-    reads as none, for `.` and `..`, and for a path elsewhere."""
-    name = path.removeprefix("/slack/api/")
+    reads as none, for `.` and `..`, and for a path elsewhere. A run of `/`s and `\\`s before the
+    name is the one separator, as real reads it (`//api.test`, `///api.test` and `\\api.test` are
+    its `api.test`, slack.com/api, 2026-10-20), so the name is what follows that run; a `/` or
+    `\\` anywhere else in it names no method, as `a//b.c` and `a\\b.c` show."""
+    name = path.removeprefix("/slack/api/").lstrip("/\\")
     if name in (".", "..") or not _METHOD_NAME.fullmatch(name):
         return None
     return name
@@ -931,15 +934,14 @@ def unserved_answer(request: Request) -> Response | None:
     the name for one it has none by, whatever the credential; and its 404 page for a path that names
     no method. A credential that resolves, on a method :data:`_OTHER_ANSWERS` does not hold, is left
     to the router, and so is a method of :data:`_ANSWERED_BY_ARGUMENTS` but for the answers its
-    comment gives here, and so are an empty name, the names `.` and `..`, a path ending in `/`, and
-    a name after two or more `/`s or a backslash, which real reads as that name (`//api.test` and
-    `\\api.test` are its `api.test`, slack.com/api, 2026-10-20)."""
+    comment gives here, and so are an empty name, the names `.` and `..`, and a path ending in `/`.
+    A name after a run of `/`s or a `\\` is answered as the name :func:`method_name` reads after
+    that run, which is the answer for a method no route here serves; one a route serves is the
+    route's, on that spelling as on its own (see `merge_slashes_before_a_slack_method_name` in
+    ``backlot.main``)."""
     path = request.scope["path"]
     rest = path.removeprefix("/slack/api/")
-    if rest in ("", ".", "..") or path.endswith("/"):
-        return None
-    lead = rest.replace("\\", "/")
-    if lead.startswith("/") and _METHOD_NAME.fullmatch(lead.lstrip("/")):
+    if rest.lstrip("/\\") in ("", ".", "..") or path.endswith("/"):
         return None
     name = method_name(path)
     if name is None:

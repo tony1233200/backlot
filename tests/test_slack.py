@@ -3886,9 +3886,17 @@ _RETIRED = (
         ("GET", "im.open", "bogus", None, None, ("unknown_method", "im.open")),
         # a method a route serves, for another HTTP method, is the route's to answer
         *((verb, m, None, None, None, _ROUTED) for verb, m in _ROUTED_ROWS),
+        # a name after two `/`s or a `\\` is the method it names (the dedicated test below pins
+        # the served ones; these are the ones this layer answers)
+        ("GET", "/nonexistent.method", None, None, None, ("unknown_method", "nonexistent.method")),
+        ("GET", "//emoji.list", "bogus", None, None, "invalid_auth"),
+        ("GET", "//emoji.list", None, None, None, "not_authed"),
+        ("GET", "/oauth.access", "admin", None, None, "invalid_code"),
+        ("GET", "\\nonexistent.method", None, None, None, ("unknown_method", "nonexistent.method")),
+        ("POST", "/nonexistent.method", None, _FORM, b"{}", "invalid_form_data"),
         # left to the router: a token that resolves, a method of `slack._ANSWERED_BY_ARGUMENTS`, a
-        # path ending in `/`, the dot segments, a name after two `/`s or a `\\`, and a method
-        # outside `slack.UNSERVED_METHODS`, its body unread
+        # path ending in `/`, the dot segments, and a method outside `slack.UNSERVED_METHODS`,
+        # its body unread
         ("GET", "emoji.list", "admin", None, None, _LEFT),
         ("GET", "files.getUploadURLExternal", "admin", None, None, _LEFT),
         ("POST", "blocks.validate", None, _FORM, b"", _LEFT),
@@ -3901,9 +3909,6 @@ _RETIRED = (
         ("GET", "emoji.list/", None, None, None, _LEFT),
         ("GET", "%2E", None, None, None, _LEFT),
         ("GET", "%2E%2E", None, None, None, _LEFT),
-        ("GET", "/api.test", None, None, None, _LEFT),
-        ("GET", "//emoji.list", "bogus", None, None, _LEFT),
-        ("GET", "\\api.test", None, None, None, _LEFT),
         ("POST", "%2E", None, None, b"{}", _LEFT),
         ("POST", "%2E%2E", None, None, b"{}", _LEFT),
         ("OPTIONS", "nonexistent.method", None, None, None, _LEFT),
@@ -3955,6 +3960,62 @@ def test_slack_answers_a_path_no_route_serves_as_real_does(
         }
     assert r.status_code == 200
     assert r.content == JSONResponse(expected).body
+
+
+def test_slack_a_method_after_doubled_slashes_or_a_backslash_is_the_method(client, admin_h, tokens):
+    """A method name after a run of `/`s, or after a `\\`, is answered as the method on its own
+    spelling, as slack.com/api answered each row in the issue's table (`slack.method_name` dates
+    the measurement): a served
+    method runs, with the credential pair it answers on its own spelling — none is `not_authed`,
+    one that does not resolve is `invalid_auth`, and a scoped person's token and the admin token
+    each serve what they serve on the plain spelling — an unserved published name answers its
+    pair, and a name real has none by answers `unknown_method` with the name as merged. A path
+    that is no method's name once its leading run is merged is real's 404 page, as a single-slash
+    one is."""
+    bogus = {"Authorization": "Bearer xoxb-not-a-real-token"}
+    ava = {"Authorization": f"Bearer {tokens['ava@acme.com']}"}
+    for prefix in ("//", "///", "\\", "\\\\"):
+        url = f"/slack/api/{prefix}api.test"
+        assert client.get(url).content == JSONResponse({"ok": True, "args": {}}).body, prefix
+        assert (
+            client.get(url, headers=bogus).content
+            == JSONResponse({"ok": False, "error": "invalid_auth"}).body
+        ), prefix
+        assert (
+            client.post(
+                f"/slack/api/{prefix}api.test", headers={"Content-Type": _FORM}, content=b"a=b"
+            ).content
+            == JSONResponse({"ok": True, "args": {"a": "b"}}).body
+        ), prefix
+    for headers, error in (({}, "not_authed"), (bogus, "invalid_auth")):
+        for name in ("conversations.list", "emoji.list"):
+            r = client.get(f"/slack/api//{name}", headers=headers)
+            assert r.content == JSONResponse({"ok": False, "error": error}).body, (name, error)
+    # a scoped token and the admin token serve the doubled spelling as they serve the plain one
+    for headers in (admin_h, ava):
+        plain = client.get("/slack/api/conversations.list", headers=headers)
+        doubled = client.get("/slack/api//conversations.list", headers=headers)
+        assert doubled.status_code == plain.status_code == 200
+        assert doubled.content == plain.content
+        posted = client.post("/slack/api//conversations.list", headers=headers, data={})
+        assert posted.content == plain.content
+    for headers in ({}, bogus, admin_h):
+        r = client.get("/slack/api//nonexistent.method", headers=headers)
+        assert (
+            r.content
+            == JSONResponse(
+                {"ok": False, "error": "unknown_method", "req_method": "nonexistent.method"}
+            ).body
+        )
+    assert (
+        client.get("/slack/api//oauth.access", headers=admin_h).content
+        == JSONResponse({"ok": False, "error": "invalid_code"}).body
+    )
+    for path in ("//a-b", "//a/b.c", "a//b.c"):
+        r = client.get(f"/slack/api/{path}")
+        assert r.status_code == 404, path
+        assert r.headers["content-type"] == "text/html; charset=utf-8", path
+        assert r.content == slack._NOT_FOUND_PAGE, path
 
 
 # The two answers here where they are not `not_authed` and `invalid_auth`: real's, or `_LEFT` for
