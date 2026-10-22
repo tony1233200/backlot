@@ -4515,6 +4515,94 @@ def test_github_backend_version_error_quotes_the_value_as_go_does(
     )
 
 
+@pytest.mark.parametrize(
+    "sent, selected",
+    [
+        (b"2022-11-28 ", "2022-11-28"),
+        (b"2022-11-28\t", "2022-11-28"),
+        (b"2026-03-10  ", "2026-03-10"),
+    ],
+)
+def test_github_api_version_with_whitespace_after_it_selects_the_version(
+    gh_client, gh_admin_h, gh_org, sent, selected
+):
+    """A supported version with whitespace after it is that version, not its 400: real reads
+    the value with the whitespace after it trimmed, on a gateway route and a backend one
+    alike (``backlot.routers.github._read_api_version``)."""
+    c, _ = gh_client
+    headers = {"Authorization": gh_admin_h["Authorization"].encode(), "X-GitHub-Api-Version": sent}
+    for path in (
+        f"/github/repos/{gh_org}/gateway",
+        f"/github/repos/{gh_org}/codebase/contents/README.md",
+    ):
+        response = _sent_raw(c, path, headers)
+        assert response.status_code == 200, (path, response.content)
+        assert response.headers["X-GitHub-Api-Version-Selected"] == selected
+
+
+@pytest.mark.parametrize(
+    "sent, named",
+    [
+        (b"a\x80b", "a\ufffdb"),
+        (b"a\xc3b", "a\ufffdb"),
+        ("aéb".encode(), "aéb"),
+        (b"a\xc2\xa0b", "a\u00a0b"),
+        (b"a ", "a"),
+        (b"a\t", "a"),
+    ],
+)
+def test_github_gateway_version_error_reads_the_value_as_utf8(
+    gh_client, gh_admin_h, gh_org, sent, named
+):
+    """The gateway's 400 names the value read as UTF-8, an undecodable byte as U+FFFD, and
+    with the whitespace after it trimmed (``backlot.routers.github._read_api_version``)."""
+    c, _ = gh_client
+    headers = {"Authorization": gh_admin_h["Authorization"].encode(), "X-GitHub-Api-Version": sent}
+    response = _sent_raw(c, f"/github/repos/{gh_org}/gateway", headers)
+    assert response.status_code == 400
+    assert response.json()["errors"] == (
+        f'The version you specified in the "X-GitHub-API-Version" request header, "{named}", '
+        "is not a supported version. The following versions are currently supported: "
+        '"2026-03-10" (most recent) and "2022-11-28".'
+    )
+
+
+#: Versions at the edges of Unicode 15.0, as bytes, and what real's backend (Unicode 15.0
+#: whatever Python serves it) quotes them as, as the bytes of its JSON: the 15.0 arrivals as
+#: sent, the 15.1 and 16.0 ones escaped (``backlot.routers.github._go_printable``).
+_GO_QUOTED_UNICODE_15_VERSIONS = [
+    ("a\U0001f6dcb".encode(), '"a\U0001f6dcb"'.encode()),
+    ("a\U00031350b".encode(), '"a\U00031350b"'.encode()),
+    ("a\U0002ebf0b".encode(), b'"a\\U0002ebf0b"'),
+    ("a\u31efb".encode(), b'"a\\u31efb"'),
+    ("a\u2ffcb".encode(), b'"a\\u2ffcb"'),
+    ("a\U0001cc00b".encode(), b'"a\\U0001cc00b"'),
+    ("a\u0897b".encode(), b'"a\\u0897b"'),
+    ("a\U0001e5d0b".encode(), b'"a\\U0001e5d0b"'),
+    (b"a ", b'"a"'),
+]
+
+
+@pytest.mark.parametrize("sent, quoted", _GO_QUOTED_UNICODE_15_VERSIONS)
+def test_github_backend_version_error_prints_by_unicode_15(
+    gh_client, gh_admin_h, gh_org, sent, quoted
+):
+    """The backend's 400 prints by Unicode 15.0 on every Python: U+1F6DC and U+31350, new in
+    15.0, as sent, and the characters 15.1 and 16.0 added as escapes, where a Python carrying
+    another database answers from its own (``backlot.routers.github._go_printable``)."""
+    c, _ = gh_client
+    headers = {"Authorization": gh_admin_h["Authorization"].encode(), "X-GitHub-Api-Version": sent}
+    response = _sent_raw(c, f"/github/repos/{gh_org}/gateway/contents/README.md", headers)
+    assert response.status_code == 400
+    quoted_json = quoted[1:-1].replace(b"\\", b"\\\\")
+    assert response.content == (
+        b'{"message":"The version you specified in the \\"X-GitHub-Api-Version\\" request '
+        b"header, " + b'\\"' + quoted_json + b'\\"' + b", is not a supported version. "
+        b"The following versions are "
+        b'currently supported: \\"2026-03-10\\" (most recent), and \\"2022-11-28\\"."}\n'
+    )
+
+
 def test_github_every_answer_carries_a_request_id(gh_client, gh_admin_h, gh_org, monkeypatch):
     """Real puts an `x-github-request-id` on every answer, served or refused, code search's
     included, and its last field is the request's own second (the measurement is in

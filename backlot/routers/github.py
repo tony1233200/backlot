@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import time
+import unicodedata
 from collections.abc import Callable
 from email.utils import format_datetime
 from typing import NamedTuple
@@ -209,6 +210,29 @@ def honours_api_version(request: Request) -> bool:
     return request.url.path != RATE_LIMIT_PATH or "authorization" in request.headers
 
 
+def _read_api_version(request: Request) -> tuple[str, str] | None:
+    """The pinned value as real reads it — ``(gateway, backend)`` — or ``None`` with no header.
+
+    Starlette hands a header's bytes back decoded as latin-1, so encoding as latin-1 is the
+    bytes that arrived. Real reads those bytes as UTF-8 and trims the whitespace after the
+    value: measured against api.github.com on 2026-10-19, `2022-11-28` with a space, a tab or
+    two spaces after it is a 200 selecting `2022-11-28`, on `contents/README.md`, `issues/1`
+    and `pulls/7619` of `psf/requests` alike, and the backend's 400 for `a` and a space names
+    `"a"`, so the trim comes before the value is compared or quoted.
+
+    The two forms differ only in what an undecodable byte becomes. The gateway's 400 names it
+    U+FFFD — `"a\\ufffdb"` for the byte 0x80 and for a lone 0xC3, `"a\\u00e9b"` for `é` sent as
+    UTF-8, U+00A0 itself for U+00A0 — which is the ``gateway`` form, a plain UTF-8 decode. The
+    backend's 400 names each such byte as `\\x` and its hex (see :func:`_go_quoted`), so the
+    ``backend`` form keeps them as surrogates for it to name.
+    """
+    raw = request.headers.get(API_VERSION_HEADER)
+    if raw is None:
+        return None
+    data = raw.encode("latin-1").rstrip(b" \t")
+    return data.decode("utf-8", "replace"), data.decode("utf-8", "surrogateescape")
+
+
 def selected_api_version(request: Request) -> str | None:
     """The version this request selected, or ``None`` if it pinned one that does not exist.
 
@@ -217,10 +241,93 @@ def selected_api_version(request: Request) -> str | None:
     `2022-11-28` on `/repos/{owner}/{repo}`, its `/issues`, `/orgs/{org}`, `/zen` and
     `DELETE /installation/token`, where `1999-01-01` is the version's 400.
     """
-    pinned = request.headers.get(API_VERSION_HEADER)
-    if not pinned:
+    forms = _read_api_version(request)
+    if forms is None or not forms[0]:
         return DEFAULT_API_VERSION
-    return pinned if pinned in API_VERSIONS else None
+    return forms[0] if forms[0] in API_VERSIONS else None
+
+
+# Real's Go carries Unicode 15.0 (see `_go_quoted`), but `unicodedata` carries the running
+# Python's database — 14.0 on 3.11, 15.1 on 3.13, 16.0 on 3.14, 17.0 on 3.15 — and a code point
+# one database prints and the other leaves unassigned is where the two backends disagree. The
+# disagreements are exactly the runs below, read off the two versions' UnicodeData.txt: a run
+# one database assigns a letter, mark, number, punctuation or symbol and the other does not.
+# `_PRINTABLE_FROM_15` is printed by 15.0 and not by 14.0; `_UNPRINTABLE_FROM_15` is keyed by
+# the running database's version and lists what it prints that 15.0 does not.
+# fmt: off
+_PRINTABLE_FROM_15 = (
+    (0xCF3, 0xCF3), (0xECE, 0xECE), (0x10EFD, 0x10EFF), (0x1123F, 0x11241), (0x11B00, 0x11B09),
+    (0x11F00, 0x11F10), (0x11F12, 0x11F3A), (0x11F3E, 0x11F59), (0x1342F, 0x1342F),
+    (0x13440, 0x13455), (0x1B132, 0x1B132), (0x1B155, 0x1B155), (0x1D2C0, 0x1D2D3),
+    (0x1DF25, 0x1DF2A), (0x1E030, 0x1E06D), (0x1E08F, 0x1E08F), (0x1E4D0, 0x1E4F9),
+    (0x1F6DC, 0x1F6DC), (0x1F774, 0x1F776), (0x1F77B, 0x1F77F), (0x1F7D9, 0x1F7D9),
+    (0x1FA75, 0x1FA77), (0x1FA87, 0x1FA88), (0x1FAAD, 0x1FAAF), (0x1FABB, 0x1FABD),
+    (0x1FABF, 0x1FABF), (0x1FACE, 0x1FACF), (0x1FADA, 0x1FADB), (0x1FAE8, 0x1FAE8),
+    (0x1FAF7, 0x1FAF8), (0x2B739, 0x2B739), (0x31350, 0x323AF)
+)
+_UNPRINTABLE_FROM_15 = {
+    "15.1.0": ((0x2FFC, 0x2FFF), (0x31EF, 0x31EF), (0x2EBF0, 0x2EE5D)),
+    "16.0.0": (
+        (0x897, 0x897), (0x1B4E, 0x1B4F), (0x1B7F, 0x1B7F), (0x1C89, 0x1C8A), (0x2427, 0x2429),
+        (0x2FFC, 0x2FFF), (0x31E4, 0x31E5), (0x31EF, 0x31EF), (0xA7CB, 0xA7CD), (0xA7DA, 0xA7DC),
+        (0x105C0, 0x105F3), (0x10D40, 0x10D65), (0x10D69, 0x10D85), (0x10D8E, 0x10D8F),
+        (0x10EC2, 0x10EC4), (0x10EFC, 0x10EFC), (0x11380, 0x11389), (0x1138B, 0x1138B),
+        (0x1138E, 0x1138E), (0x11390, 0x113B5), (0x113B7, 0x113C0), (0x113C2, 0x113C2),
+        (0x113C5, 0x113C5), (0x113C7, 0x113CA), (0x113CC, 0x113D5), (0x113D7, 0x113D8),
+        (0x113E1, 0x113E2), (0x116D0, 0x116E3), (0x11BC0, 0x11BE1), (0x11BF0, 0x11BF9),
+        (0x11F5A, 0x11F5A), (0x13460, 0x143FA), (0x16100, 0x16139), (0x16D40, 0x16D79),
+        (0x18CFF, 0x18CFF), (0x1CC00, 0x1CCF9), (0x1CD00, 0x1CEB3), (0x1E5D0, 0x1E5FA),
+        (0x1E5FF, 0x1E5FF), (0x1F8B2, 0x1F8BB), (0x1F8C0, 0x1F8C1), (0x1FA89, 0x1FA89),
+        (0x1FA8F, 0x1FA8F), (0x1FABE, 0x1FABE), (0x1FAC6, 0x1FAC6), (0x1FADC, 0x1FADC),
+        (0x1FADF, 0x1FADF), (0x1FAE9, 0x1FAE9), (0x1FBCB, 0x1FBEF), (0x2EBF0, 0x2EE5D),
+    ),
+    "17.0.0": (
+        (0x88F, 0x88F), (0x897, 0x897), (0xC5C, 0xC5C), (0xCDC, 0xCDC), (0x1ACF, 0x1ADD),
+        (0x1AE0, 0x1AEB), (0x1B4E, 0x1B4F), (0x1B7F, 0x1B7F), (0x1C89, 0x1C8A), (0x20C1, 0x20C1),
+        (0x2427, 0x2429), (0x2B96, 0x2B96), (0x2FFC, 0x2FFF), (0x31E4, 0x31E5), (0x31EF, 0x31EF),
+        (0xA7CB, 0xA7CF), (0xA7D2, 0xA7D2), (0xA7D4, 0xA7D4), (0xA7DA, 0xA7DC), (0xA7F1, 0xA7F1),
+        (0xFBC3, 0xFBD2), (0xFD90, 0xFD91), (0xFDC8, 0xFDCE), (0x105C0, 0x105F3),
+        (0x10940, 0x10959), (0x10D40, 0x10D65), (0x10D69, 0x10D85), (0x10D8E, 0x10D8F),
+        (0x10EC2, 0x10EC7), (0x10ED0, 0x10ED8), (0x10EFA, 0x10EFC), (0x11380, 0x11389),
+        (0x1138B, 0x1138B), (0x1138E, 0x1138E), (0x11390, 0x113B5), (0x113B7, 0x113C0),
+        (0x113C2, 0x113C2), (0x113C5, 0x113C5), (0x113C7, 0x113CA), (0x113CC, 0x113D5),
+        (0x113D7, 0x113D8), (0x113E1, 0x113E2), (0x116D0, 0x116E3), (0x11B60, 0x11B67),
+        (0x11BC0, 0x11BE1), (0x11BF0, 0x11BF9), (0x11DB0, 0x11DDB), (0x11DE0, 0x11DE9),
+        (0x11F5A, 0x11F5A), (0x13460, 0x143FA), (0x16100, 0x16139), (0x16D40, 0x16D79),
+        (0x16EA0, 0x16EB8), (0x16EBB, 0x16ED3), (0x16FF2, 0x16FF6), (0x187F8, 0x187FF),
+        (0x18CFF, 0x18CFF), (0x18D09, 0x18D1E), (0x18D80, 0x18DF2), (0x1CC00, 0x1CCFC),
+        (0x1CD00, 0x1CEB3), (0x1CEBA, 0x1CED0), (0x1CEE0, 0x1CEF0), (0x1E5D0, 0x1E5FA),
+        (0x1E5FF, 0x1E5FF), (0x1E6C0, 0x1E6DE), (0x1E6E0, 0x1E6F5), (0x1E6FE, 0x1E6FF),
+        (0x1F6D8, 0x1F6D8), (0x1F777, 0x1F77A), (0x1F8B2, 0x1F8BB), (0x1F8C0, 0x1F8C1),
+        (0x1F8D0, 0x1F8D8), (0x1FA54, 0x1FA57), (0x1FA89, 0x1FA8A), (0x1FA8E, 0x1FA8F),
+        (0x1FABE, 0x1FABE), (0x1FAC6, 0x1FAC6), (0x1FAC8, 0x1FAC8), (0x1FACD, 0x1FACD),
+        (0x1FADC, 0x1FADC), (0x1FADF, 0x1FADF), (0x1FAE9, 0x1FAEA), (0x1FAEF, 0x1FAEF),
+        (0x1FBCB, 0x1FBEF), (0x1FBFA, 0x1FBFA), (0x2B73A, 0x2B73F), (0x2CEA2, 0x2CEAD),
+        (0x2EBF0, 0x2EE5D), (0x323B0, 0x33479),
+    ),
+}
+# fmt: on
+
+
+def _in_runs(runs: tuple[tuple[int, int], ...], cp: int) -> bool:
+    return any(lo <= cp <= hi for lo, hi in runs)
+
+
+def _go_printable(ch: str) -> bool:
+    """Whether Go's `unicode.IsPrint` prints `ch`, by Unicode 15.0 as real's Go carries it:
+    letters, marks, numbers, punctuation, symbols and the ASCII space. `str.isprintable`
+    keeps the same classes by the running Python's database instead, so on a Python whose
+    database is not 15.0 the runs above correct it (see the tables' comment)."""
+    version = unicodedata.unidata_version
+    if version == "15.0.0":
+        return ch.isprintable()
+    cp = ord(ch)
+    if version == "14.0.0":
+        return ch.isprintable() or _in_runs(_PRINTABLE_FROM_15, cp)
+    later = _UNPRINTABLE_FROM_15.get(version)
+    if later is not None:
+        return ch.isprintable() and not _in_runs(later, cp)
+    return ch.isprintable()
 
 
 def _go_quoted(value: str) -> str:
@@ -228,8 +335,8 @@ def _go_quoted(value: str) -> str:
     backend names the version it refused: `"` and `\\` behind a backslash, a tab as `\\t`, a byte
     that is not UTF-8 as `\\x` and its two hex digits, a character Go does not print as `\\u` and
     four (`\\U` and eight past U+FFFF), and every other character as it came. What Go prints is
-    what `str.isprintable` keeps: letters, marks, numbers, punctuation, symbols and the ASCII space,
-    each by the Unicode version it carries.
+    what :func:`_go_printable` keeps. ``value`` is the backend form :func:`_read_api_version`
+    hands back, its undecodable bytes still surrogates.
 
     Measured against api.github.com on 2026-10-19, sending each byte from 0x01 to 0xFF but CR and
     LF between an `a` and a `b` on `contents/README.md`, then UTF-8 sequences the same way: the
@@ -239,10 +346,10 @@ def _go_quoted(value: str) -> str:
     and each byte of a truncated, overlong, surrogate or past-U+10FFFF sequence as `\\x`. The other
     control bytes and DEL were the front door's 400 and reached no backend. Real's Go carries
     Unicode 15.0, as Python 3.12 does: U+1F6DC and U+31350, new in 15.0, came back as sent, and
-    U+2EBF0, U+31EF and U+2FFC from 15.1 and U+1CC00 from 16.0 as escapes.
+    U+2EBF0, U+31EF and U+2FFC from 15.1 and U+1CC00, U+0897 and U+1E5D0 from 16.0 as escapes.
     """
     out = []
-    for ch in value.encode("latin-1").decode("utf-8", "surrogateescape"):
+    for ch in value:
         cp = ord(ch)
         if 0xDC80 <= cp <= 0xDCFF:  # where `surrogateescape` puts an undecodable byte
             out.append(f"\\x{cp & 0xFF:02x}")
@@ -250,24 +357,26 @@ def _go_quoted(value: str) -> str:
             out.append("\\" + ch)
         elif ch == "\t":
             out.append("\\t")
-        elif ch.isprintable():
+        elif _go_printable(ch):
             out.append(ch)
         else:
             out.append(f"\\u{cp:04x}" if cp < 0x10000 else f"\\U{cp:08x}")
     return '"' + "".join(out) + '"'
 
 
-def _unsupported_version_error(pinned: str, *, backend: bool = False) -> HTTPException:
+def _unsupported_version_error(forms: tuple[str, str], *, backend: bool = False) -> HTTPException:
     """The gateway or backend's 400, including the wording a client can match on.
 
-    Composed from ``API_VERSIONS`` rather than pasted, so the sentence cannot fall out of step with
-    the list it describes. The gateway's "X (most recent) and Y" and backend's comma before "and"
-    are measured for two versions; a third would need real's phrasing for three, not a guess at it.
+    ``forms`` is :func:`_read_api_version`'s pair: the gateway names the first and the backend
+    quotes the second. Composed from ``API_VERSIONS`` rather than pasted, so the sentence cannot
+    fall out of step with the list it describes. The gateway's "X (most recent) and Y" and
+    backend's comma before "and" are measured for two versions; a third would need real's
+    phrasing for three, not a guess at it.
     """
     newest, *rest = API_VERSIONS
     supported = ", ".join(f'"{v}"' for v in rest)
     if backend:
-        quoted = _go_quoted(pinned)
+        quoted = _go_quoted(forms[1])
         exc = HTTPException(status_code=400, headers={SELECTED_VERSION_HEADER: ""})
         exc.github_body = {
             "message": (
@@ -283,7 +392,8 @@ def _unsupported_version_error(pinned: str, *, backend: bool = False) -> HTTPExc
     exc.github_body = {
         "message": "Bad Request",
         "errors": (
-            f'The version you specified in the "X-GitHub-API-Version" request header, "{pinned}", '
+            f'The version you specified in the "X-GitHub-API-Version" request header, '
+            f'"{forms[0]}", '
             f"is not a supported version. The following versions are currently supported: "
             f'"{newest}" (most recent) and {supported}.'
         ),
@@ -334,7 +444,7 @@ async def _validate_api_version(request: Request) -> None:
             and not getattr(request.state, "answering_head", False)
             and not (_github_media(request, "diff") or _github_media(request, "patch"))
         )
-        raise _unsupported_version_error(request.headers[API_VERSION_HEADER], backend=backend)
+        raise _unsupported_version_error(_read_api_version(request), backend=backend)
 
 
 async def _validate_path_owner(request: Request) -> None:
