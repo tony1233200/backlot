@@ -12035,12 +12035,19 @@ _CQL_PARSE_ROWS = [
                 "id in recentlyViewedContent(5, 6) and type = page",
                 "id in recentlyViewedContent ( 5 , 6 ) and type = page",
             ),
-            # `type in (recentlyViewedContent(5))` answers 200 with no results on this
-            # server: the call stands for the ids it gives, and it gives none here — what
-            # real answers when it gives no id is open.
+            # `type in (recentlyViewedContent(5, 1))` answers 200 with no results on this
+            # server: the call stands for the ids it gives, and it gives none here.
             (
-                "type in (recentlyViewedContent(5))",
-                "type in ( recentlyViewedContent ( 5 ) )",
+                "type in (recentlyViewedContent(5, 1))",
+                "type in ( recentlyViewedContent ( 5 , 1 ) )",
+            ),
+            (
+                'id in recentlyViewedContent(5, "+1")',
+                'id in recentlyViewedContent ( 5 , "+1" )',
+            ),
+            (
+                'id in recentlyViewedContent(5, "٥")',
+                'id in recentlyViewedContent ( 5 , "٥" )',
             ),
             ("created > endOfDay()", "created > endOfDay ( )"),
             ("created < endOfWeek()", "created < endOfWeek ( )"),
@@ -12134,6 +12141,27 @@ _CQL_PARSE_ROWS = [
             ("label = select order by bogus", _CQL_NOT_PARSED),
             ("bogus = x order by bogus", _CQL_NOT_PARSED),
             ("type = recentlyViewedContent(5) order by bogus", _CQL_NOT_PARSED),
+            *[
+                (f"type = page order by {field}", _CQL_NOT_PARSED)
+                for field in (
+                    "ancestor",
+                    "container",
+                    "content.property",
+                    "hasdecision",
+                    "isverified",
+                    "label",
+                    "macro",
+                    "parent",
+                    "sitesearch",
+                    "space.key",
+                    "space.title",
+                    "space.type",
+                    "text",
+                )
+            ],
+            ("type = page order by Label", _CQL_NOT_PARSED),
+            ("type = page order by title, label desc", _CQL_NOT_PARSED),
+            ("bogus = x order by label", _CQL_NOT_PARSED),
             ("type=page b and type=page", _CQL_NOT_PARSED),
             ("type=page and label = 5b16", "Unrecognised clause at : b16"),
             ("type=page and title = 5b16", "Unrecognised clause at : b16"),
@@ -12277,6 +12305,10 @@ _CQL_PARSE_ROWS = [
             ("(type = page) and (type = page", "Missing closing parenthesis near field (()"),
             ("type = page and (", "Missing closing parenthesis near field (()"),
             ("type = page or (", "Missing closing parenthesis near field (()"),
+            ("(type = page or", "Missing closing parenthesis near field (()"),
+            ("(type = page and not", "Missing closing parenthesis near field (()"),
+            ("(bogus = x and", "Missing closing parenthesis near field (()"),
+            ("bogus = x and (type = page or", "No field exists with the name: 'bogus'"),
             ("bogus = x and (", "No field exists with the name: 'bogus'"),
             ("label = select and (", _cql_reserved("select")),
             (
@@ -12348,6 +12380,10 @@ _CQL_PARSE_ROWS = [
             ("id in recentlyViewedContent(x)", "Invalid size limit : x"),
             ("id in recentlyViewedContent(1.5)", "Invalid size limit : 1.5"),
             ("id in recentlyViewedContent(5, x)", "Invalid offset : x"),
+            ("id in recentlyViewedContent(5, 1.5)", "Invalid offset : 1.5"),
+            ('id in recentlyViewedContent(5, " 6")', "Invalid offset :  6"),
+            ("id in recentlyViewedContent(5, 2147483648)", "Invalid offset : 2147483648"),
+            ('id in recentlyViewedContent(5, "-2147483649")', "Invalid offset : -2147483649"),
             ("id in recentlyViewedContent(5, 6, 7)", _CQL_NOT_PARSED),
             ("id in recentlyViewedContent(-1)", _CQL_NOT_PARSED),
             ("id in recentlyViewedContent(-1.5)", _CQL_NOT_PARSED),

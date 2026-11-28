@@ -4564,6 +4564,26 @@ _CQL_FIELD_INFO = {
     for fields, ops, listing, shape in _CQL_FIELD_GROUPS
     for field in fields
 }
+# The fields `order by` does not take, by their lower-case spelling: real answered
+# `type = page order by <field>` with `Could not parse cql : ` for each of them (Confluence
+# Cloud, 2026-11-28).
+_CQL_UNORDERED_FIELDS = frozenset(
+    (
+        "ancestor",
+        "container",
+        "content.property",
+        "hasdecision",
+        "isverified",
+        "label",
+        "macro",
+        "parent",
+        "sitesearch",
+        "space.key",
+        "space.title",
+        "space.type",
+        "text",
+    )
+)
 # The 58 fields in the fixed order the Did-you-mean tie-break reads: by first letter, then
 # shorter first, with the same-length ties in the order real offers them (measured on
 # Confluence Cloud on 2026-11-04): `created, content, creator`, `favorite, filesize`,
@@ -4733,13 +4753,12 @@ def _cql_function_arity(name: str, args: list[tuple[str, str]]) -> bool:
     what :data:`_CQL_FUNCTIONS` records, for `recentlyViewedContent` a quoted count that is no
     integer, and for a date function an unquoted number. A `recentlyViewedContent` count that is a
     word takes any argument count: real answered `recentlyViewedContent(x, 6)` as it answered
-    `recentlyViewedContent(x)`, the invalid size limit of :func:`_cql_function_cannot_run`, where
-    the 2026-10-31 and 2026-11-07 measurement that `recentlyViewedContent(5, 6)` was
-    ``cql_not_parsed`` does not record the query around the call, and on 2026-11-25 and
-    2026-11-26 `id in recentlyViewedContent(5, 6)` ran. A negative number among a call's
-    arguments is :func:`_cql_grammar_refusal`'s, and a reserved word for the count
-    :func:`_cql_refusal`'s. Real answered `startOfMonth(-1)` with ``cql_not_parsed`` where it read
-    `startOfMonth("-1")` as a relative date (Confluence Cloud, 2026-10-31)."""
+    `recentlyViewedContent(x)`, the invalid size limit of :func:`_cql_function_cannot_run`
+    (Confluence Cloud, 2026-10-31 and 2026-11-07), and `id in recentlyViewedContent(5, 6)` ran
+    (2026-11-25 and 2026-11-26). A negative number among a call's arguments is
+    :func:`_cql_grammar_refusal`'s, and a reserved word for the count :func:`_cql_refusal`'s. Real
+    answered `startOfMonth(-1)` with ``cql_not_parsed`` where it read `startOfMonth("-1")` as a
+    relative date (Confluence Cloud, 2026-10-31)."""
     if name == "recentlyViewedContent" and args and args[0][0] == "WORD":
         return False
     low, high = _CQL_FUNCTIONS[name]
@@ -4762,10 +4781,13 @@ def _cql_function_cannot_run(name: str, args: list[tuple[str, str]]):
     count, which real cannot read as a size limit: `id in recentlyViewedContent(x)` answered
     `Invalid size limit : x`, and `1.5`, `a.b` and `x, 6` for the `x` the same naming `1.5`, `a.b`
     and `x` (Confluence Cloud, 2026-11-05 and 2026-11-07); and `recentlyViewedContent` with a
-    second argument real cannot read as an offset: `id in recentlyViewedContent(5, x)` answered
-    `Invalid offset : x` (Confluence Cloud, 2026-11-25 and 2026-11-26). A reserved word for the
-    count is :func:`_cql_refusal`'s, read before this. `currentContent()` runs on this route, and
-    `currentUser()`, `now()` and `recentlyViewedContent()` run with what the route has."""
+    second argument real cannot read as an offset, a Java `int` as :func:`_parse_long` reads its
+    digits: `id in recentlyViewedContent(5, x)` answered `Invalid offset : x` (Confluence Cloud,
+    2026-11-25 and 2026-11-26), and `1.5`, `" 6"`, `2147483648` and `"-2147483649"` for the `x`
+    the same naming the offset with its quotes off, where `"+1"` and `"٥"` ran (2026-11-28). A
+    reserved word for the count is :func:`_cql_refusal`'s, read before this. `currentContent()`
+    runs on this route, and `currentUser()`, `now()` and `recentlyViewedContent()` run with what
+    the route has."""
     if name == "currentSpace":
         return errors_atlassian.cql_function_needs_context(name, "space")
     if name in _CQL_DATE_FUNCTIONS and args:
@@ -4780,12 +4802,8 @@ def _cql_function_cannot_run(name: str, args: list[tuple[str, str]]):
         if len(args) == 2:
             kind, text = args[1]
             value = _cql_unquote(kind, text) if kind == "QUOTED" else text
-            if not (
-                kind == "NUMBER"
-                and "." not in text
-                or kind == "QUOTED"
-                and re.fullmatch(r"[+-]?[0-9]+", value)
-            ):
+            offset = _parse_long(value) if kind in ("NUMBER", "QUOTED") else None
+            if offset is None or not JAVA_INT[0] <= offset <= JAVA_INT[1]:
                 return errors_atlassian.cql_invalid_offset(value)
     return None
 
@@ -4890,13 +4908,11 @@ def _cql_grammar_refusal(tokens: list[tuple[str, str]]):
     arguments, a function other than `recentlyViewedContent` in place of an `in` list, and a `(`
     never closed with a `)` anywhere after it, a list's or a call's `)` included; a `(` never closed
     with no `)` after it is the missing parenthesis of :func:`_cql_refusal`. Measured on
-    Confluence Cloud on 2026-10-31: a second argument or an empty `recentlyViewedContent()` was
-    answered `Could not parse cql : ` beside any other wrong in the CQL, even a missing value or an
-    unknown field earlier in it, and `(label = foo()`, `(space = currentSpace()` and
-    `(created > now("x")` the same, where `(type=page` is the missing parenthesis refusal — but
-    that second-argument measurement does not record the query around the call, and on 2026-11-25
-    and 2026-11-26 `id in recentlyViewedContent(5, 6)` ran, so a second argument is read where
-    the call stands after `in` or `not in`. On
+    Confluence Cloud on 2026-10-31: an empty `recentlyViewedContent()` was answered
+    `Could not parse cql : ` beside any other wrong in the CQL, even a missing value or an unknown
+    field earlier in it, and `(label = foo()`, `(space = currentSpace()` and `(created > now("x")`
+    the same, where `(type=page` is the missing parenthesis refusal. On 2026-11-28
+    `id in recentlyViewedContent(5, x, 7)` was answered `Could not parse cql : ` too. On
     2026-11-04 `id in now("-1d")`, `label in currentUser()`, `id in currentContent()`,
     `id in currentSpace()`, `id in foo()`, `id in recentlyviewedcontent(5)` and
     `space.key in now("-1d")` were answered `Could not parse cql : ` as well, and `id in now("-1d")`
@@ -5133,11 +5149,10 @@ def _cql_refusal(tokens: list[tuple[str, str]]):
         nonlocal at
         kind, field = peek()
         if kind != "WORD" or field.lower() in _CQL_KEYWORDS:
-            # A clause missing inside a group never closed is the missing parenthesis, not the
-            # missing clause: `type = page and (` answered `Missing closing parenthesis near
-            # field (()`, and a fault recorded ahead of it — an unknown field, a reserved word,
-            # a function that returns no single value — answers instead (Confluence Cloud,
-            # 2026-11-25 and 2026-11-26).
+            # missing clause: `type = page and (` and `(type = page or` answered
+            # `Missing closing parenthesis near field (()`, and a fault recorded ahead of the
+            # group — an unknown field, a reserved word, a function that returns no single value —
+            # answers instead (Confluence Cloud, 2026-11-25, 2026-11-26 and 2026-11-28).
             if kind is None and groups:
                 raise missing_parenthesis()
             raise not_parsed()
@@ -5222,8 +5237,6 @@ def _cql_refusal(tokens: list[tuple[str, str]]):
             at += 1
             if conjunction == "and" and keyword("not"):
                 at += 1
-            if peek()[0] is None:
-                raise not_parsed()
 
     try:
         if not tokens:
@@ -5244,10 +5257,11 @@ def _cql_refusal(tokens: list[tuple[str, str]]):
                 kind, text = peek()
                 if kind != "WORD" or text.lower() in _CQL_KEYWORDS:
                     raise not_parsed()
-                # `order by` takes a field: `type = page order by bogus` answered
-                # `Could not parse cql : `, where `type = page order by title` ran
-                # (Confluence Cloud, 2026-11-25 and 2026-11-26).
-                if text.lower() not in _CQL_FIELD_INFO:
+                # `order by` takes a field it orders by: `type = page order by bogus` answered
+                # `Could not parse cql : `, where `type = page order by title` ran (Confluence
+                # Cloud, 2026-11-25 and 2026-11-26), and `_CQL_UNORDERED_FIELDS` holds the fields
+                # it does not order by.
+                if text.lower() not in _CQL_FIELD_INFO or text.lower() in _CQL_UNORDERED_FIELDS:
                     raise not_parsed()
                 at += 1
                 if keyword("asc") or keyword("desc"):
@@ -5341,10 +5355,11 @@ def _cql_named_value(kind: str, text: str, call, current_user: str | None, now: 
     Cloud, 2026-11-24). `recentlyViewedContent` gives None: real refused
     `type = recentlyViewedContent(5)` as no function that returns a single value, which
     :func:`_cql_refusal` answers before a value is named. In an `in` list that refusal does not
-    apply, and the call stands for the ids it gives: this server keeps no recently viewed content,
-    so it gives none here and no value is named for the field to refuse — `type in
-    (recentlyViewedContent(5))` answers 200 with no results. What real answers when the function
-    gives no id was not measured, so that standing answer is open."""
+    apply, and the call stands for the ids it gives: on an account that had viewed one page, real
+    answered `type in (recentlyViewedContent(5))` with `Unsupported value for type` naming that
+    page's id, and `type in (recentlyViewedContent(5, 1))`, which gives no id, with 200 and no
+    results (Confluence Cloud, 2026-11-28). This server keeps no recently viewed content, so the
+    call gives no id here and no value is named for the field to refuse."""
     if call is None:
         return _cql_unquote(kind, text)
     name, args = call
