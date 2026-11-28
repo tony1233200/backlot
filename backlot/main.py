@@ -1213,14 +1213,17 @@ async def route_a_google_path_the_way_google_does(request: Request, call_next):
 
 
 @_middleware(lambda scope: errors.atlassian.is_confluence(_url_path(scope)))
-async def refuse_an_illegal_confluence_charset(request: Request, call_next):
+async def refuse_a_confluence_content_type_spring_fails(request: Request, call_next):
     """Answer a Spring Confluence request whose `Content-Type` carries a charset Java cannot name
-    with the empty 500 real answers (``atlassian.refuse_a_spring_confluence_charset``), ahead of
+    with the empty 500 real answers (``atlassian.refuse_a_spring_confluence_charset``), and then one
+    its multipart parser fails (``atlassian.refuse_a_spring_confluence_multipart``), ahead of
     routing. Registered before the slash rewrite, which makes it the inner of the two, so it reads
     the path that rewrite leaves and the spelling it keeps; the front door stays outside both, so
     the gateway's `PATCH` 405 still comes first.
     """
     refused = atlassian.refuse_a_spring_confluence_charset(request)
+    if refused is None:
+        refused = atlassian.refuse_a_spring_confluence_multipart(request)
     if refused is not None:
         return refused
     return await call_next(request)

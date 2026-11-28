@@ -6463,22 +6463,6 @@ _CONFLUENCE_ATTACHMENT_WRITES = _operations(
     ]
 )
 
-#: The Confluence writes outside the attachment writes whose `Content-Type` of
-#: `multipart/form-data` with no `boundary` real fails with a 500 ahead of the operation
-#: (``errors.atlassian.refuse_a_multipart_write_with_no_boundary``), measured 2026-11-26 on
-#: `POST space/{key}/permission`, `POST content/{id}/version` and `POST content`: the attachment
-#: writes are the sibling case, scoped to the operations whose consumes row names
-#: `multipart/form-data`, and the reads and the `DELETE` under the same header answer no 500, so
-#: they stay out of this list.
-_MULTIPART_NO_BOUNDARY_WRITES = _operations(
-    (
-        "POST /wiki/rest/api/content",
-        "POST /wiki/rest/api/content/{}/version",
-        "POST /wiki/rest/api/space/{}/permission",
-    )
-)
-
-
 #: The Confluence operation that answers an `Accept` admitting no JSON with its anonymous 403, in
 #: the shape that `Accept` asks for (``errors.atlassian.confluence_refusal``), rather than the 406,
 #: under each method it is published for, measured 2026-10-13. Of the 69 GETs swept the same day,
@@ -6721,21 +6705,7 @@ def refuse_a_spring_confluence_charset(request: Request) -> Response | None:
     `OPTIONS` and `DELETE` at `space`, `POST space/{key}/permission` and `GET space/{key}/nope`
     answered the 401.
     """
-    vendor_path = _vendor_path(request.scope["path"])
-    # with its trailing slash, which the routed path has lost: `/wiki/rest/api/` is Jersey's 404
-    # where `/wiki/rest/api` is the page
-    sent = _vendor_path(_echoed_path(request))
-    if not (sent.startswith("/wiki/rest/") or sent.startswith("/wiki/api/v2/")):
-        return None
-    if _is(_CONFLUENCE_JAXRS, None, vendor_path) or _is(_CONFLUENCE_JAXRS_GETS, None, vendor_path):
-        return None
-    spring = (
-        sent.startswith("/wiki/api/v2/")
-        or _is(_CONFLUENCE_PUBLISHED, None, vendor_path)
-        or _is(_CONFLUENCE_OUTSIDE_THE_DOCUMENT, None, vendor_path)
-        or _confluence_serves_html(sent)
-    )
-    if not spring or auth.basic_credential_kind(request) == auth.BASIC_UNPARSEABLE:
+    if not _spring_answers_confluence(request):
         return None
     refused = errors_atlassian.refuse_a_confluence_charset(request.headers)
     if refused is None:
@@ -6743,6 +6713,59 @@ def refuse_a_spring_confluence_charset(request: Request) -> Response | None:
     # the vendor's answer to a wrong request, which the telemetry classes by this mark
     request.state.answered_5xx = True
     return Response(refused.body, status_code=refused.status_code)
+
+
+def refuse_a_spring_confluence_multipart(request: Request) -> Response | None:
+    """The 500 Confluence answers a `POST` or a `PUT` whose multipart `Content-Type` names no
+    boundary (``errors.atlassian.refuse_a_multipart_write_with_no_boundary``) wherever its Spring
+    application answers the path (:func:`_spring_answers_confluence`), in the v2 API's shape below
+    `/wiki/api/v2/`, or None.
+
+    Measured on Confluence Cloud on 2026-11-28 with `multipart/form-data` and the body `x`, with a
+    credential and with none: a `POST` at `space`, `content`, `space/{key}/permission` and
+    `/wiki/rest/api` and at `label`, `restriction`, `property`, `version` and `child/attachment`
+    below `content/{id}`, a `PUT` at `space/{key}`, `content`, `content/{id}` and
+    `content/{id}/property/x`, and below `/wiki/api/v2/` a `POST` at `pages`, `spaces`, `blogposts`,
+    `footer-comments` and `nosuch` and a `PUT` at `pages/{id}` answered the 500, and with no
+    credential so did a `POST` at `content/{id}`, `space/{key}/nope` and `/wiki/rest/nope`. A `POST`
+    at `contentbody/convert/storage` answered Jersey's empty 415, at `search` its empty 405, and at
+    `/wiki/rest/api/` and `/wiki/rest/api/nosuch` its 404. A `GET` at `pages` below `/wiki/api/v2/`
+    and a `DELETE` at `content/{id}`, with a credential and with none, and with none a `HEAD` and an
+    `OPTIONS` at `content`, an `OPTIONS` at `pages` and a `DELETE` at `pages/{id}` below
+    `/wiki/api/v2/`, answered no 500. `multipart/form-data; charset=` was the charset's empty 500
+    (:func:`refuse_a_spring_confluence_charset`), and a `Basic !!!` beside the type Tomcat's 401.
+    """
+    if request.method not in ("POST", "PUT") or not _spring_answers_confluence(request):
+        return None
+    refused = errors_atlassian.refuse_a_multipart_write_with_no_boundary(
+        request.headers, v2=_vendor_path(_echoed_path(request)).startswith("/wiki/api/v2/")
+    )
+    if refused is None:
+        return None
+    # the vendor's answer to a wrong request, which the telemetry classes by this mark
+    request.state.answered_5xx = True
+    return Response(refused.body, status_code=refused.status_code, headers=refused.headers)
+
+
+def _spring_answers_confluence(request: Request) -> bool:
+    """Whether Confluence's Spring application answers ``request``'s path, which
+    :func:`refuse_a_spring_confluence_charset` names and measures, under a Basic value Tomcat can
+    read or none."""
+    vendor_path = _vendor_path(request.scope["path"])
+    # with its trailing slash, which the routed path has lost: `/wiki/rest/api/` is Jersey's 404
+    # where `/wiki/rest/api` is the page
+    sent = _vendor_path(_echoed_path(request))
+    if not (sent.startswith("/wiki/rest/") or sent.startswith("/wiki/api/v2/")):
+        return False
+    if _is(_CONFLUENCE_JAXRS, None, vendor_path) or _is(_CONFLUENCE_JAXRS_GETS, None, vendor_path):
+        return False
+    spring = (
+        sent.startswith("/wiki/api/v2/")
+        or _is(_CONFLUENCE_PUBLISHED, None, vendor_path)
+        or _is(_CONFLUENCE_OUTSIDE_THE_DOCUMENT, None, vendor_path)
+        or _confluence_serves_html(sent)
+    )
+    return spring and auth.basic_credential_kind(request) != auth.BASIC_UNPARSEABLE
 
 
 async def _published_answer(request: Request, vendor_path: str) -> Response | None:
@@ -6776,15 +6799,6 @@ async def _published_answer(request: Request, vendor_path: str) -> Response | No
     # `request.url.path` here classifies the path by product and mount only; nothing echoes it (the
     # refusals below carry no path, and `_echoed_path` reads the raw spelling where one does)
     if errors_atlassian.is_confluence(request.url.path):
-        # `POST /wiki/api/v2/pages` is published by the v2 API, outside the v1 baseline's list,
-        # so the gate below would skip it: the multipart failure is answered before it, with the
-        # v2 API's member (``errors.atlassian.refuse_a_multipart_write_with_no_boundary``)
-        if method == "POST" and vendor_path == "/wiki/api/v2/pages":
-            refused = errors_atlassian.refuse_a_multipart_write_with_no_boundary(
-                request.headers, request.headers.get("accept"), v2=True
-            )
-            if refused is not None:
-                raise refused
         if method == "OPTIONS" or not (
             _is(_CONFLUENCE_PUBLISHED, method, vendor_path)
             or _is(_CONFLUENCE_OUTSIDE_THE_DOCUMENT, method, vendor_path)
@@ -6792,14 +6806,6 @@ async def _published_answer(request: Request, vendor_path: str) -> Response | No
             return None
         if auth.basic_credential_kind(request) == auth.BASIC_UNPARSEABLE:
             _confluence_caller(request)  # Tomcat's 401, ahead of the media-type check too
-        # the multipart parser's failure, ahead of the caller's refusal and of Spring's 415:
-        # measured in ``errors.atlassian.refuse_a_multipart_write_with_no_boundary``
-        if _is(_MULTIPART_NO_BOUNDARY_WRITES, method, vendor_path):
-            refused = errors_atlassian.refuse_a_multipart_write_with_no_boundary(
-                request.headers, request.headers.get("accept")
-            )
-            if refused is not None:
-                raise refused
         for verb, pattern, consumes in _CONFLUENCE_CONSUMES:
             if verb == method and pattern.fullmatch(vendor_path):
                 if "multipart/form-data" in consumes:

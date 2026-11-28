@@ -1441,12 +1441,10 @@ def refuse_a_multipart_it_cannot_read(headers, body: bytes) -> AtlassianError | 
     `Content-Type` starts `multipart/` in any case where its parser cannot read the request, or None
     where it can or the type is no multipart type: the type holds no boundary
     (:func:`_multipart_boundary`, an empty one being none), or the body does not split at it
-    (:func:`_multipart_parts`). The body is Spring's `errors` list, under `application/json` where
-    `Accept` admits JSON (:func:`accepts`), under the first `+json` type it names where it admits
-    none but names one, and empty under no `content-type` where it names neither or cannot be read.
-    Measured on Confluence Cloud on 2026-10-16 at `POST content/{id}/child/attachment`, on
-    2026-11-26 at each of the attachment writes, and with a body that does not split on 2026-11-27
-    at both writes to `content/{id}/child/attachment`. Which refusals come before it and after it is
+    (:func:`_multipart_parts`). The 500 is :func:`_multipart_failure`'s. Measured on Confluence
+    Cloud on 2026-10-16 at `POST content/{id}/child/attachment`, on 2026-11-26 at each of the
+    attachment writes, and with a body that does not split on 2026-11-27 at both writes to
+    `content/{id}/child/attachment`. Which refusals come before it and after it is
     ``backlot.routers.atlassian._published_answer``'s to say."""
     value = (headers.get("content-type") or "").strip(" \t")
     if value[:10].lower() != "multipart/":
@@ -1454,14 +1452,7 @@ def refuse_a_multipart_it_cannot_read(headers, body: bytes) -> AtlassianError | 
     boundary = _multipart_boundary(value)
     if boundary and _multipart_parts(boundary, body) is not None:
         return None
-    accept = headers.get("accept")
-    takes = accepts(accept, reader="spring")
-    media_type = "application/json" if takes else _json_family(accept) if takes is False else None
-    if media_type is None:
-        return AtlassianError(500, b"")
-    body = {"status": 500, "code": "INTERNAL_SERVER_ERROR", "title": "Internal Server Error"}
-    encoded = json.dumps({"errors": [body]}, separators=(",", ":")).encode()
-    return AtlassianError(500, encoded, headers={"Content-Type": media_type})
+    return _multipart_failure(headers.get("accept"))
 
 
 def refuse_a_credentialled_attachment_write(
@@ -1541,35 +1532,16 @@ def malformed_escape_pair(uri: str) -> AtlassianError | None:
             ),
         },
     )
-def refuse_a_multipart_write_with_no_boundary(
-    headers, accept: str | None, *, v2: bool = False
-) -> AtlassianError | None:
-    """The 500 Confluence answers a write whose `Content-Type` is `multipart/form-data` carrying
-    no `boundary` parameter, or None where it carries one, is no multipart type or is not there
-    at all: the multipart parser fails the request before the operation answers it, ahead of the
-    caller's refusal with a credential or without one and ahead of Spring's 415. Measured on
-    Confluence Cloud on 2026-11-26 at `POST space/{key}/permission`, `POST content/{id}/version`
-    and `POST content` with the body `x`: `multipart/form-data` bare was the 500
-    `application/json`
-    `{"errors":[{"status":500,"code":"INTERNAL_SERVER_ERROR","title":"Internal Server Error"}]}`
-    with a credential or without one, and `multipart/form-data; boundary=x` got past it to the
-    415 or the caller's refusal; `POST /wiki/api/v2/pages` drew the same 500 with `"detail":null`
-    in its member. Under an `Accept` admitting no JSON (`text/html` on `POST content`, with no
-    credential) the 500 carries no body and no `content-type`. The type is read as Spring reads
-    it; a charset or another parameter beside it is no boundary.
-    """
-    value = (headers.get("content-type") or "").strip(" \t")
-    if not value:
-        return None
-    parsed = _spring_media_type(value, charset_in_any_case=False)
-    if parsed is None:
-        return None
-    kind, subtype, parameters = parsed
-    if (kind, subtype) != ("multipart", "form-data"):
-        return None
-    if any(name.lower() == "boundary" for name, _ in parameters):
-        return None
-    if accepts(accept, reader="spring") is not True:
+
+
+def _multipart_failure(accept: str | None, *, v2: bool = False) -> AtlassianError:
+    """The 500 Confluence's multipart parser fails a request with: Spring's `errors` list, under
+    `application/json` where ``accept`` admits JSON (:func:`accepts`), under the first `+json` type
+    it names where it admits none but names one, and empty under no `content-type` where it names
+    neither or cannot be read. ``v2`` adds the v2 API's `"detail":null` to its member."""
+    takes = accepts(accept, reader="spring")
+    media_type = "application/json" if takes else _json_family(accept) if takes is False else None
+    if media_type is None:
         return AtlassianError(500, b"")
     member: dict = {
         "status": 500,
@@ -1578,8 +1550,24 @@ def refuse_a_multipart_write_with_no_boundary(
     }
     if v2:
         member["detail"] = None
-    return AtlassianError(500, {"errors": [member]})
->>>>>>> 5c069d6 (Confluence answers a multipart/form-data write with no boundary outside the attachment writes as the 500 real fails it with)
+    encoded = json.dumps({"errors": [member]}, separators=(",", ":")).encode()
+    return AtlassianError(500, encoded, headers={"Content-Type": media_type})
+
+
+def refuse_a_multipart_write_with_no_boundary(
+    headers, *, v2: bool = False
+) -> AtlassianError | None:
+    """Confluence's multipart failure (:func:`_multipart_failure`, ``v2`` choosing the v2 API's
+    member) where the `Content-Type` starts `multipart/` in any case and names no boundary, or None.
+    The boundary is read as :func:`_multipart_boundary` reads it, with a `,` between parameters
+    taken as a `;`. ``tests/test_atlassian.py::_MULTIPART_NO_BOUNDARY`` holds the types and the
+    `Accept` values measured on Confluence Cloud on 2026-11-28 at `POST content` and
+    `POST /wiki/api/v2/pages`.
+    """
+    value = (headers.get("content-type") or "").strip(" \t")
+    if value[:10].lower() != "multipart/" or _multipart_boundary(value.replace(",", ";")):
+        return None
+    return _multipart_failure(headers.get("accept"), v2=v2)
 
 
 #: The one `Accept` holding a member Jira cannot read that it reads all the same, as

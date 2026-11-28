@@ -11004,14 +11004,13 @@ def test_confluence_fails_a_charset_java_cannot_name_where_spring_answers(client
     }
 
 
-#: A write whose `Content-Type` is `multipart/form-data` with no `boundary`, outside the
-#: attachment writes (``errors.atlassian.refuse_a_multipart_write_with_no_boundary``): the 500
-#: real fails it with, ahead of the caller's refusal and of Spring's 415, with a credential or
-#: without one, and the v2 API's member carrying `"detail":null`. Under an `Accept` admitting no
-#: JSON the 500 carries no body and no `content-type`, and a `boundary` beside the type gets past
-#: it exactly as before. A `GET` or a `DELETE` under the same header answers no 500. ``"admin"``
-#: is the admin's token; ``"v1"`` and ``"v2"`` are the 500's JSON body in each API's shape, a
-#: string the reason of a 415, bytes the exact body, and None the status alone.
+#: A `POST` or a `PUT` whose `Content-Type` is a multipart type naming no boundary, at a path
+#: Confluence's Spring application answers (``atlassian.refuse_a_spring_confluence_multipart``), and
+#: the requests beside it that get past it. ``"admin"`` is the admin's token; ``"v1"`` and ``"v2"``
+#: are the 500's JSON body in each API's shape under `application/json`, or, in a pair, under the
+#: type the pair names, a string the reason of a 415, bytes the exact body, and None the status
+#: alone. Each row is as real answered it, the admin's token sent as a non-administrator's Basic
+#: credential.
 _MULTIPART_NO_BOUNDARY = [
     # the writes the issue measures, with a credential or without one
     ("POST", "/wiki/rest/api/space/ZZQ/permission", None, "multipart/form-data", None, 500, "v1"),
@@ -11044,11 +11043,90 @@ _MULTIPART_NO_BOUNDARY = [
     ),
     ("POST", "/wiki/rest/api/content", None, "multipart/form-data", None, 500, "v1"),
     ("POST", "/wiki/rest/api/content", "admin", "multipart/form-data", None, 500, "v1"),
+    ("PUT", "/wiki/rest/api/content/999999999", None, "multipart/form-data", None, 500, "v1"),
+    (
+        "POST",
+        "/wiki/rest/api/content/999999999/property",
+        None,
+        "multipart/form-data",
+        None,
+        500,
+        "v1",
+    ),
     ("POST", "/wiki/api/v2/pages", None, "multipart/form-data", None, 500, "v2"),
     ("POST", "/wiki/api/v2/pages", "admin", "multipart/form-data", None, 500, "v2"),
+    ("PUT", "/wiki/api/v2/pages/999999999", None, "multipart/form-data", None, 500, "v2"),
+    # a method the path does not take, a path no operation names, and the product's page
+    ("PUT", "/wiki/rest/api/content", None, "multipart/form-data", None, 500, "v1"),
+    ("POST", "/wiki/rest/api/content/999999999", None, "multipart/form-data", None, 500, "v1"),
+    ("POST", "/wiki/rest/api/space/ZZQ/nope", None, "multipart/form-data", None, 500, "v1"),
+    ("POST", "/wiki/rest/nope", None, "multipart/form-data", None, 500, "v1"),
+    ("POST", "/wiki/rest/api", None, "multipart/form-data", None, 500, "v1"),
+    ("POST", "/wiki/api/v2/nosuch", None, "multipart/form-data", None, 500, "v2"),
+    # any multipart type in any case, and a boundary that is empty or has no value
+    ("POST", "/wiki/rest/api/content", None, "MULTIPART/FORM-DATA", None, 500, "v1"),
+    ("POST", "/wiki/rest/api/content", None, "multipart/mixed", None, 500, "v1"),
+    ("POST", "/wiki/rest/api/content", None, "multipart/", None, 500, "v1"),
+    (
+        "POST",
+        "/wiki/rest/api/content",
+        None,
+        "multipart/form-data; charset=utf-8",
+        None,
+        500,
+        "v1",
+    ),
+    (
+        "POST",
+        "/wiki/rest/api/content",
+        None,
+        "multipart/form-data; boundary=",
+        None,
+        500,
+        "v1",
+    ),
+    (
+        "POST",
+        "/wiki/rest/api/content",
+        None,
+        'multipart/form-data; boundary=""',
+        None,
+        500,
+        "v1",
+    ),
+    (
+        "POST",
+        "/wiki/rest/api/content",
+        None,
+        "multipart/form-data;boundary",
+        None,
+        500,
+        "v1",
+    ),
+    # `Accept` choosing the 500's type, or leaving it empty
+    ("POST", "/wiki/rest/api/content", None, "multipart/form-data", "*/*", 500, "v1"),
+    (
+        "POST",
+        "/wiki/rest/api/content",
+        None,
+        "multipart/form-data",
+        "application/problem+json",
+        500,
+        ("v1", "application/problem+json"),
+    ),
+    (
+        "POST",
+        "/wiki/api/v2/pages",
+        None,
+        "multipart/form-data",
+        "application/problem+json",
+        500,
+        ("v2", "application/problem+json"),
+    ),
     # `Accept: text/html` leaves the 500 with no body and no `content-type`
     ("POST", "/wiki/rest/api/content", None, "multipart/form-data", "text/html", 500, b""),
     ("POST", "/wiki/rest/api/content", "admin", "multipart/form-data", "text/html", 500, b""),
+    ("POST", "/wiki/rest/api/content", None, "multipart/form-data", "application/xml", 500, b""),
     (
         "POST",
         "/wiki/rest/api/space/ZZQ/permission",
@@ -11068,7 +11146,21 @@ _MULTIPART_NO_BOUNDARY = [
         b"",
     ),
     ("POST", "/wiki/api/v2/pages", None, "multipart/form-data", "text/html", 500, b""),
-    # a `boundary` beside the type gets past it exactly as before
+    # the charset's 500 and Tomcat's 401 come first
+    (
+        "POST",
+        "/wiki/rest/api/space/ZZQ/permission",
+        None,
+        "multipart/form-data; charset=",
+        None,
+        500,
+        b"",
+    ),
+    ("POST", "/wiki/rest/api/content", "Basic !!!", "multipart/form-data", None, 401)
+    + (errors_atlassian.tomcat_page(401).encode(),),
+    ("POST", "/wiki/api/v2/pages", "Basic !!!", "multipart/form-data", None, 401)
+    + (errors_atlassian.tomcat_page(401).encode(),),
+    # a boundary gets past it
     (
         "POST",
         "/wiki/rest/api/space/ZZQ/permission",
@@ -11089,6 +11181,49 @@ _MULTIPART_NO_BOUNDARY = [
     ),
     ("POST", "/wiki/rest/api/content", None, "multipart/form-data; boundary=x", None, 403)
     + (errors_atlassian.CONFLUENCE_FORBIDDEN_BODY,),
+    (
+        "POST",
+        "/wiki/rest/api/content",
+        None,
+        "multipart/form-data; Boundary=x",
+        None,
+        403,
+    )
+    + (errors_atlassian.CONFLUENCE_FORBIDDEN_BODY,),
+    (
+        "POST",
+        "/wiki/rest/api/content",
+        None,
+        'multipart/form-data; boundary="x"',
+        None,
+        403,
+    )
+    + (errors_atlassian.CONFLUENCE_FORBIDDEN_BODY,),
+    (
+        "POST",
+        "/wiki/rest/api/content",
+        None,
+        "multipart/form-data; boundary= x",
+        None,
+        403,
+    )
+    + (errors_atlassian.CONFLUENCE_FORBIDDEN_BODY,),
+    (
+        "POST",
+        "/wiki/rest/api/content",
+        None,
+        "multipart/form-data,boundary=x",
+        None,
+        403,
+    )
+    + (errors_atlassian.CONFLUENCE_FORBIDDEN_BODY,),
+    # a type that is no multipart type
+    ("POST", "/wiki/rest/api/content", None, "multipart", None, 403)
+    + (errors_atlassian.CONFLUENCE_FORBIDDEN_BODY,),
+    ("POST", "/wiki/rest/api/content", None, "multipartx/form-data", None, 403)
+    + (errors_atlassian.CONFLUENCE_FORBIDDEN_BODY,),
+    # Jersey's path, and a `GET` or a `DELETE`, draw no 500
+    ("POST", "/wiki/rest/api/search", None, "multipart/form-data", None, 405, b""),
     # a `GET` or a `DELETE` under the same header answers no 500
     ("GET", "/wiki/rest/api/space", None, "multipart/form-data", None, 403)
     + (errors_atlassian.CONFLUENCE_FORBIDDEN_BODY,),
@@ -11101,10 +11236,8 @@ _MULTIPART_NO_BOUNDARY = [
         403,
     )
     + (errors_atlassian.CONFLUENCE_FORBIDDEN_BODY,),
-    ("GET", "/wiki/api/v2/pages", None, "multipart/form-data", None, 302, None),
     ("DELETE", "/wiki/rest/api/content/999999999", None, "multipart/form-data", None, 403)
     + (errors_atlassian.CONFLUENCE_FORBIDDEN_BODY,),
-    ("DELETE", "/wiki/rest/api/content/999999999", "admin", "multipart/form-data", None, 405, None),
 ]
 
 
@@ -11117,20 +11250,21 @@ def _multipart_no_boundary(
     if authorization is not None:
         token = admin_h["Authorization"] if authorization == "admin" else authorization
         headers.append(("Authorization", token))
-    content = b"x" if method in ("POST", "DELETE") else None
+    content = b"x" if method in ("POST", "PUT", "DELETE") else None
     r = sent_as(
         client, method, f"/atlassian{vendor_path}", headers, content=content, bare=accept is None
     )
     assert r.status_code == status, r.text[:200]
-    if body in ("v1", "v2"):
+    if body in ("v1", "v2") or isinstance(body, tuple):
+        shape, media_type = body if isinstance(body, tuple) else (body, _JSON_TYPE)
         member: dict = {
             "status": 500,
             "code": "INTERNAL_SERVER_ERROR",
             "title": "Internal Server Error",
         }
-        if body == "v2":
+        if shape == "v2":
             member["detail"] = None
-        assert r.headers.get("content-type") == "application/json"
+        assert r.headers.get("content-type") == media_type
         assert r.json() == {"errors": [member]}
     elif isinstance(body, str):
         assert r.json() == {

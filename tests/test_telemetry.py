@@ -1251,6 +1251,7 @@ def test_a_spent_github_window_is_a_rate_limit(hello):
 # no credential, so that each place that marks one ``answered_5xx`` is reached.
 _VENDOR_5XX = [
     ("GET", f"{W}/space", "Content-Type", "text/plain;charset=", 500, None),
+    ("POST", f"{W}/content", "Content-Type", "multipart/form-data", 500, None),
     ("OPTIONS", f"{W}/space", "Content-Type", "text/plain;charset=", 500, None),
     ("GET", f"{W}/space", "Accept", "application/json;Q=abc, text/plain", 500, None),
     ("GET", f"{W}/nopesuchroute", "Accept", "application/json;q=2", 500, None),

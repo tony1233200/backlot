@@ -33,8 +33,8 @@ answer (Google's ``notImplemented``), so it is ``client``, and so is a 505, S3's
 to a target holding a space (``backlot.request_target._s3``), and each 5xx in ``_ANSWERED_5XX``, a
 vendor's answer to a wrong request. A route can say the same of a 5xx it answers by setting
 ``answered_5xx`` on the request's state, which the telemetry middleware reads: Atlassian's charset,
-sort and write failures, and Jersey's for a character past ASCII in ``Accept`` and for the 404 it
-cannot write.
+sort and write failures and its parser's for a multipart type naming no boundary, and Jersey's for a
+character past ASCII in ``Accept`` and for the 404 it cannot write.
 """
 
 from __future__ import annotations
